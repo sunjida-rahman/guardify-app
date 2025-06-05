@@ -1,25 +1,39 @@
-// backend/server.js
+
+const fs = require('fs');
 const express = require('express');
 const admin = require('firebase-admin');
-require('dotenv').config(); // To load sensitive data from .env file
-const bodyParser = require('body-parser');
+require('dotenv').config();
 const cors = require('cors');
 
+let serviceAccount;
+
+// If running locally (serviceAccountKey.json file exists), load from file
+if (fs.existsSync('./serviceAccountKey.json')) {
+  serviceAccount = require('./serviceAccountKey.json');
+} else if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY) {
+  // If running on Railway or other env, parse env variable string and fix newlines
+  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY);
+  // Replace literal "\\n" with real newlines "\n" in private_key
+  serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
+} else {
+  console.error('No Firebase service account key found!');
+  process.exit(1);
+}
 // Initialize express app
 const app = express();
-const port = 5000; // Set port to 5000 for the backend server
+const port = process.env.PORT || 5000;
 
-// Firebase Admin SDK setup
+// Initialize Firebase Admin
 admin.initializeApp({
-  credential: admin.credential.cert(require('./serviceAccountKey.json')),  // Firebase Service Account Key
-  databaseURL: process.env.FIREBASE_DATABASE_URL // Firebase Database URL from .env
+  credential: admin.credential.cert(serviceAccount),
+  databaseURL: process.env.FIREBASE_DATABASE_URL
 });
 
-// Middleware to parse incoming JSON requests
+// Middleware
 app.use(express.json());
-app.use(cors()); // Enable CORS for frontend to communicate with backend
+app.use(cors());
 
-// Test Firebase connection by reading data from the root
+// Test Firebase connection
 admin.database().ref('/').once('value')
   .then((snapshot) => {
     console.log('Firebase connected successfully, data from root:', snapshot.val());
@@ -28,12 +42,11 @@ admin.database().ref('/').once('value')
     console.error('Error connecting to Firebase:', error);
   });
 
-// Route to test if the server is running
+// Routes
 app.get('/test', (req, res) => {
   res.send('Firebase connected and server is running!');
 });
 
-// Middleware to verify Firebase ID token (for authentication)
 const verifyIdToken = async (req, res, next) => {
   const idToken = req.headers.authorization;
 
@@ -43,20 +56,18 @@ const verifyIdToken = async (req, res, next) => {
 
   try {
     const decodedToken = await admin.auth().verifyIdToken(idToken);
-    req.user = decodedToken;  // Attach user data to request object
+    req.user = decodedToken;
     next();
   } catch (error) {
     res.status(401).send('Unauthorized: Invalid token');
   }
 };
 
-// Route to handle user login and registration
 app.post('/login', verifyIdToken, async (req, res) => {
   const { isNewUser, user } = req.body;
 
   if (isNewUser) {
     try {
-      // Store new user data in Firebase Realtime Database
       const userRef = admin.database().ref('users/' + user.uid);
       await userRef.set({
         name: user.displayName,
@@ -64,7 +75,6 @@ app.post('/login', verifyIdToken, async (req, res) => {
         uid: user.uid,
         createdAt: new Date().toISOString(),
       });
-
       return res.json({ message: 'New user saved to database', user: user });
     } catch (error) {
       console.error('Error saving new user:', error);
@@ -72,15 +82,12 @@ app.post('/login', verifyIdToken, async (req, res) => {
     }
   }
 
-  // For existing users, you can fetch user data or process differently
   return res.json({ message: 'Existing user logged in', user: user });
 });
 
-// Route to add location data to Firebase
 app.post('/add-location', (req, res) => {
   const { userId, latitude, longitude } = req.body;
 
-  // Reference to Firebase Realtime Database for location
   const ref = admin.database().ref('locations');
 
   ref.push({
@@ -96,7 +103,6 @@ app.post('/add-location', (req, res) => {
     });
 });
 
-// Sample Route - Fetch User Data (protected route)
 app.get('/user', verifyIdToken, async (req, res) => {
   const uid = req.user.uid;
   const userRef = admin.database().ref('users/' + uid);
